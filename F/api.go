@@ -19,6 +19,7 @@ import (
 	g "github.com/qydysky/part/get"
 	limit "github.com/qydysky/part/limit"
 	reqf "github.com/qydysky/part/reqf"
+	sync "github.com/qydysky/part/sync"
 	web "github.com/qydysky/part/web"
 
 	uuid "github.com/gofrs/uuid"
@@ -29,14 +30,14 @@ import (
 var apilog = c.Log.Base(`api`)
 var api_limit = limit.New(1, 2000, 30000) //频率限制1次/2s，最大等待时间30s
 
-func Get(key string) {
+func Get(key string, kv sync.Map) {
 	apilog := apilog.Base_add(`Get`)
 
 	if api_limit.TO() {
 		return
 	} //超额请求阻塞，超时将取消
 
-	var api_can_get = map[string][]func() []string{
+	var api_can_get = map[string][]func(sync.Map) []string{
 		`Cookie`: { //Cookie
 			Get_cookie,
 		},
@@ -197,7 +198,7 @@ func Get(key string) {
 	if fList, ok := api_can_get[key]; ok {
 		for _, fItem := range fList {
 			apilog.L(`T: `, `Get`, key)
-			missKey := fItem()
+			missKey := fItem(kv)
 			if len(missKey) > 0 {
 				apilog.L(`T: `, `missKey when get`, key, missKey)
 				for _, misskeyitem := range missKey {
@@ -208,9 +209,9 @@ func Get(key string) {
 						apilog.L(`W: `, `missKey equrt key`, key, missKey)
 						continue
 					}
-					Get(misskeyitem)
+					Get(misskeyitem, kv)
 				}
-				missKey := fItem()
+				missKey := fItem(kv)
 				if len(missKey) > 0 {
 					apilog.L(`W: `, `missKey when get`, key, missKey)
 					continue
@@ -223,8 +224,8 @@ func Get(key string) {
 	}
 }
 
-func GetUid() (missKey []string) {
-	if uid, ok := c.Cookie.LoadV(`DedeUserID`).(string); !ok { //cookie中无DedeUserID
+func GetUid(kv sync.Map) (missKey []string) {
+	if uid, ok := kv.LoadV(`Cookie`).(map[string]string)[`DedeUserID`]; !ok { //cookie中无DedeUserID
 		missKey = append(missKey, `Cookie`)
 	} else if uid, e := strconv.Atoi(uid); e != nil {
 		missKey = append(missKey, `Cookie`)
@@ -245,7 +246,7 @@ func Info(UpUid int) (info J.Info) {
 		req := reqf.New()
 		if err := req.Reqf(reqf.Rval{
 			Url:     `https://api.bilibili.com/x/space/acc/info?mid=` + strconv.Itoa(UpUid) + `&jsonp=jsonp`,
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -281,7 +282,7 @@ func Html() (missKey []string) {
 	{
 		r := g.Get(reqf.Rval{
 			Url:   "https://live.bilibili.com/" + Roomid,
-			Proxy: c.Proxy,
+			Proxy: kv.LoadV(`Common.Proxy`).(string),
 		})
 
 		if tmp := r.S(`<script>window.__NEPTUNE_IS_MY_WAIFU__=`, `</script>`, 0, 0); tmp.Err != nil {
@@ -441,15 +442,17 @@ func missRoomId() (missKey []string) {
 	return
 }
 
-func getInfoByRoom() (missKey []string) {
+func getInfoByRoom(kv sync.Map) (missKey []string) {
 	apilog := apilog.Base_add(`getInfoByRoom`)
 
-	if c.Roomid == 0 {
+	var roomId = kv.LoadV(`common.Roomid`).(int)
+
+	if roomId == 0 {
 		missKey = append(missKey, `Roomid`)
 		return
 	}
 
-	Roomid := strconv.Itoa(c.Roomid)
+	Roomid := strconv.Itoa(roomId)
 
 	{ //使用其他api
 		req := reqf.New()
@@ -458,7 +461,7 @@ func getInfoByRoom() (missKey []string) {
 			Header: map[string]string{
 				`Referer`: "https://live.bilibili.com/" + Roomid,
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -479,36 +482,39 @@ func getInfoByRoom() (missKey []string) {
 			}
 
 			//直播开始时间
-			c.Live_Start_Time = time.Unix(int64(j.Data.RoomInfo.LiveStartTime), 0)
+			kv.Store(`common.Live_Start_Time`, time.Unix(int64(j.Data.RoomInfo.LiveStartTime), 0))
 			//是否在直播
-			c.Liveing = j.Data.RoomInfo.LiveStatus == 1
+			kv.Store(`common.Liveing`, j.Data.RoomInfo.LiveStatus == 1)
 			//直播间标题
-			c.Title = j.Data.RoomInfo.Title
+			kv.Store(`common.Title`, j.Data.RoomInfo.Title)
 			//主播名
-			c.Uname = j.Data.AnchorInfo.BaseInfo.Uname
+			kv.Store(`common.Uname`, j.Data.AnchorInfo.BaseInfo.Uname)
 			//分区
-			c.ParentAreaID = j.Data.RoomInfo.ParentAreaID
+			kv.Store(`common.ParentAreaID`, j.Data.RoomInfo.ParentAreaID)
 			//子分区
-			c.AreaID = j.Data.RoomInfo.AreaID
+			kv.Store(`common.AreaID`, j.Data.RoomInfo.AreaID)
 			//主播id
-			c.UpUid = j.Data.RoomInfo.UID
+			kv.Store(`common.UpUid`, j.Data.RoomInfo.UID)
 			//房间id
 			if j.Data.RoomInfo.RoomID != 0 {
-				c.Roomid = j.Data.RoomInfo.RoomID
+				kv.Store(`common.Roomid`, j.Data.RoomInfo.RoomID)
 			}
 			//舰长数
-			c.GuardNum = j.Data.GuardInfo.Count
+			kv.Store(`common.GuardNum`, j.Data.GuardInfo.Count)
 			//分区排行
-			c.Note = j.Data.HotRankInfo.AreaName
-			if rank := j.Data.HotRankInfo.Rank; rank > 50 || rank == 0 {
-				c.Note += "50+"
-			} else {
-				c.Note += strconv.Itoa(rank)
+			{
+				var note = j.Data.HotRankInfo.AreaName
+				if rank := j.Data.HotRankInfo.Rank; rank > 50 || rank == 0 {
+					note += "50+"
+				} else {
+					note += strconv.Itoa(rank)
+				}
+				kv.Store(`common.Note`, note)
 			}
 			//直播间是否被封禁
 			if j.Data.RoomInfo.LockStatus == 1 {
 				apilog.L(`W: `, "直播间封禁中")
-				c.Locked = true
+				kv.Store(`common.Locked`, true)
 				return
 			}
 		}
@@ -516,28 +522,24 @@ func getInfoByRoom() (missKey []string) {
 	return
 }
 
-func getRoomPlayInfo() (missKey []string) {
+func getRoomPlayInfo(kv sync.Map) (missKey []string) {
 	apilog := apilog.Base_add(`getRoomPlayInfo`)
 
-	if c.Roomid == 0 {
+	if kv.LoadV(`Roomid`).(int) == 0 {
 		missKey = append(missKey, `Roomid`)
 	}
-	if !c.LIVE_BUVID {
+	if !kv.LoadV(`LIVE_BUVID`).(bool) {
 		missKey = append(missKey, `LIVE_BUVID`)
 	}
 	if len(missKey) > 0 {
 		return
 	}
 
-	Roomid := strconv.Itoa(c.Roomid)
+	Roomid := strconv.Itoa(kv.LoadV(`Roomid`).(int))
 
 	//Roominitres
 	{
-		Cookie := make(map[string]string)
-		c.Cookie.Range(func(k, v interface{}) bool {
-			Cookie[k.(string)] = v.(string)
-			return true
-		})
+		Cookie := kv.LoadV(`Cookie`).(map[string]string)
 
 		req := reqf.New()
 		if err := req.Reqf(reqf.Rval{
@@ -546,7 +548,7 @@ func getRoomPlayInfo() (missKey []string) {
 				`Referer`: "https://live.bilibili.com/" + Roomid,
 				`Cookie`:  reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -565,21 +567,21 @@ func getRoomPlayInfo() (missKey []string) {
 		}
 
 		//主播uid
-		c.UpUid = j.Data.UID
+		kv.Store(`Common.UpUid`, j.Data.UID)
 		//房间号（完整）
 		if j.Data.RoomID != 0 {
-			c.Roomid = j.Data.RoomID
+			kv.Store(`Common.Roomid`, j.Data.RoomID)
 		}
 		//直播开始时间
-		c.Live_Start_Time = time.Unix(int64(j.Data.LiveTime), 0)
+		kv.Store(`Common.Live_Start_Time`, time.Unix(int64(j.Data.LiveTime), 0))
 		//是否在直播
-		c.Liveing = j.Data.LiveStatus == 1
+		kv.Store(`Common.Liveing`, j.Data.LiveStatus == 1)
 
 		//未在直播，不获取直播流
 		if !c.Liveing {
-			c.Live_qn = 0
-			c.AcceptQn = c.Qn
-			c.Live = []string{}
+			kv.Store(`Common.Live_qn`, 0)
+			kv.Store(`Common.AcceptQn`, kv.LoadV(`Common.Qn`).(map[int]string))
+			kv.Store(`Common.Live`, []string{})
 			return
 		}
 
@@ -604,7 +606,7 @@ func getRoomPlayInfo() (missKey []string) {
 			}
 
 			want_type := name_map[`hls`]
-			if v, ok := c.K_v.LoadV(`直播流类型`).(string); ok {
+			if v, ok := kv.LoadV(`直播流类型`).(string); ok {
 				if v, ok := name_map[v]; ok {
 					want_type = v
 				} else {
@@ -631,24 +633,28 @@ func getRoomPlayInfo() (missKey []string) {
 							}
 
 							//当前直播流质量
-							c.Live_qn = v.CurrentQn
-							if c.Live_want_qn == 0 {
-								c.Live_want_qn = v.CurrentQn
+							kv.Store(`Common.Live_qn`, v.CurrentQn)
+							if kv.LoadV(`Common.Live_want_qn`).(int) == 0 {
+								kv.Store(`Common.Live_want_qn`, v.CurrentQn)
 							}
 							//允许的清晰度
 							{
+								var qn = kv.LoadV(`Common.Qn`).(map[int]string)
 								var tmp = make(map[int]string)
 								for _, v := range v.AcceptQn {
-									if s, ok := c.Qn[v]; ok {
+									if s, ok := qn[v]; ok {
 										tmp[v] = s
 									}
 								}
-								c.AcceptQn = tmp
+								kv.Store(`Common.AcceptQn`, tmp)
 							}
 							//直播流链接
-							c.Live = []string{}
-							for _, v1 := range v.URLInfo {
-								c.Live = append(c.Live, v1.Host+v.BaseURL+v1.Extra)
+							{
+								var live = []string{}
+								for _, v1 := range v.URLInfo {
+									live = append(live, v1.Host+v.BaseURL+v1.Extra)
+								}
+								kv.Store(`Common.Live`, live)
 							}
 						}
 					}
@@ -720,7 +726,7 @@ func getRoomPlayInfoByQn() (missKey []string) {
 				`Referer`: "https://live.bilibili.com/" + Roomid,
 				`Cookie`:  reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -883,7 +889,7 @@ func getDanmuInfo() (missKey []string) {
 				`Referer`: "https://live.bilibili.com/" + Roomid,
 				`Cookie`:  reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 		}); err != nil {
 			apilog.L(`E: `, err)
@@ -932,7 +938,7 @@ func Get_face_src(uid string) string {
 			`Referer`: "https://live.bilibili.com/" + strconv.Itoa(c.Roomid),
 			`Cookie`:  reqf.Map_2_Cookies_String(Cookie),
 		},
-		Proxy:   c.Proxy,
+		Proxy:   kv.LoadV(`Common.Proxy`).(string),
 		Timeout: 10 * 1000,
 		Retry:   2,
 	}); err != nil {
@@ -998,7 +1004,7 @@ func Get_HotRank() (missKey []string) {
 				`Referer`:         "https://live.bilibili.com/" + Roomid,
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -1070,7 +1076,7 @@ func Get_guardNum() (missKey []string) {
 				`Referer`:         "https://live.bilibili.com/" + Roomid,
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -1162,8 +1168,8 @@ func Get_guardNum() (missKey []string) {
 var boot_Get_cookie funcCtrl.FlashFunc //新的替代旧的
 
 //扫码登录
-func Get_cookie() (missKey []string) {
-	if v, ok := c.K_v.LoadV(`扫码登录`).(bool); !ok || !v {
+func Get_cookie(kv sync.Map) (missKey []string) {
+	if v, ok := kv.LoadV(`扫码登录`).(bool); !ok || !v {
 		return
 	}
 
@@ -1171,9 +1177,8 @@ func Get_cookie() (missKey []string) {
 
 	if p.Checkfile().IsExist("cookie.txt") { //读取cookie文件
 		if cookieString := string(CookieGet()); cookieString != `` {
-			for k, v := range reqf.Cookies_String_2_Map(cookieString) { //cookie存入全局变量syncmap
-				c.Cookie.Store(k, v)
-			}
+			//cookie存入全局变量syncmap
+			kv.Store(`Cookie`, reqf.Cookies_String_2_Map(cookieString))
 			if miss := CookieCheck([]string{
 				`bili_jct`,
 				`DedeUserID`,
@@ -1193,7 +1198,7 @@ func Get_cookie() (missKey []string) {
 		r := reqf.New()
 		if e := r.Reqf(reqf.Rval{
 			Url:     `https://passport.bilibili.com/qrcode/getLoginUrl`,
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); e != nil {
@@ -1265,7 +1270,7 @@ func Get_cookie() (missKey []string) {
 		})
 		defer server.Shutdown(context.Background())
 
-		if c.K_v.LoadV(`扫码登录自动打开标签页`).(bool) {
+		if kv.LoadV(`扫码登录自动打开标签页`).(bool) {
 			open.Run(`http://` + server.Addr + `/qr.png`)
 		}
 		apilog.Block(1000)
@@ -1288,11 +1293,7 @@ func Get_cookie() (missKey []string) {
 
 	var cookie string
 	{ //循环查看是否通过
-		Cookie := make(map[string]string)
-		c.Cookie.Range(func(k, v interface{}) bool {
-			Cookie[k.(string)] = v.(string)
-			return true
-		})
+		Cookie := kv.LoadV(`Cookie`).(map[string]string)
 
 		for {
 			//3s刷新查看是否通过
@@ -1312,7 +1313,7 @@ func Get_cookie() (missKey []string) {
 					`Referer`:      `https://passport.bilibili.com/login`,
 					`Cookie`:       reqf.Map_2_Cookies_String(Cookie),
 				},
-				Proxy:   c.Proxy,
+				Proxy:   kv.LoadV(`Common.Proxy`).(string),
 				Timeout: 10 * 1000,
 				Retry:   2,
 			}); e != nil {
@@ -1361,21 +1362,8 @@ func Get_cookie() (missKey []string) {
 	}
 
 	{ //写入cookie.txt
-		for k, v := range reqf.Cookies_String_2_Map(cookie) {
-			c.Cookie.Store(k, v)
-		}
-		//生成cookieString
-		cookieString := ``
-		{
-			c.Cookie.Range(func(k, v interface{}) bool {
-				cookieString += k.(string) + `=` + v.(string) + `; `
-				return true
-			})
-			t := []rune(cookieString)
-			cookieString = string(t[:len(t)-2])
-		}
-
-		CookieSet([]byte(cookieString))
+		kv.Store(`Cookie`, reqf.Cookies_String_2_Map(cookie))
+		CookieSet([]byte(cookie))
 	}
 
 	//有新实例，退出
@@ -1425,7 +1413,7 @@ func Get_list_in_room() (array []J.GetMyMedals_Items) {
 				Header: map[string]string{
 					`Cookie`: reqf.Map_2_Cookies_String(Cookie),
 				},
-				Proxy:   c.Proxy,
+				Proxy:   kv.LoadV(`Common.Proxy`).(string),
 				Timeout: 10 * 1000,
 				Retry:   2,
 			}); e != nil {
@@ -1483,7 +1471,7 @@ func Get_weared_medal() (item J.GetWearedMedal_Data) {
 			Header: map[string]string{
 				`Cookie`: reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); e != nil {
@@ -1597,7 +1585,7 @@ func CheckSwitch_FansMedal() (missKey []string) {
 				`Content-Type`: `application/x-www-form-urlencoded; charset=UTF-8`,
 				`Referer`:      `https://passport.bilibili.com/login`,
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); e != nil {
@@ -1655,7 +1643,7 @@ func Dosign() {
 				`Referer`:         "https://live.bilibili.com/all",
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -1705,7 +1693,7 @@ func Dosign() {
 				`Referer`:         "https://live.bilibili.com/all",
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -1764,7 +1752,7 @@ func Get_LIVE_BUVID() (missKey []string) {
 				`DNT`:                       `1`,
 				`Upgrade-Insecure-Requests`: `1`,
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -1941,7 +1929,7 @@ func F_x25Kn() {
 					`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 				},
 				PostStr: url.PathEscape(PostStr),
-				Proxy:   c.Proxy,
+				Proxy:   kv.LoadV(`Common.Proxy`).(string),
 				Timeout: 5 * 1000,
 				Retry:   2,
 			}); err != nil {
@@ -2054,7 +2042,7 @@ func F_x25Kn() {
 					`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 				},
 				PostStr: url.PathEscape(PostStr),
-				Proxy:   c.Proxy,
+				Proxy:   kv.LoadV(`Common.Proxy`).(string),
 				Timeout: 5 * 1000,
 				Retry:   2,
 			}); err != nil {
@@ -2141,7 +2129,7 @@ func Gift_list() (list []Gift_list_type_Data_List) {
 			`Referer`:         "https://live.bilibili.com/" + strconv.Itoa(c.Roomid),
 			`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 		},
-		Proxy:   c.Proxy,
+		Proxy:   kv.LoadV(`Common.Proxy`).(string),
 		Timeout: 3 * 1000,
 		Retry:   2,
 	}); err != nil {
@@ -2210,7 +2198,7 @@ func Silver_2_coin() (missKey []string) {
 				`Referer`:         `https://link.bilibili.com/p/center/index`,
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -2260,7 +2248,7 @@ func Silver_2_coin() (missKey []string) {
 				`Referer`:         `https://link.bilibili.com/p/center/index`,
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -2317,7 +2305,7 @@ func Silver_2_coin() (missKey []string) {
 				`Referer`:         `https://link.bilibili.com/p/center/index`,
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -2406,7 +2394,7 @@ func Feed_list() (Uplist []UpItem) {
 				`Referer`:         `https://t.bilibili.com/pages/nav/index_new`,
 				`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 3 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -2458,7 +2446,7 @@ func GetHistory(Roomid_int int) (j J.GetHistory) {
 			Header: map[string]string{
 				`Referer`: "https://live.bilibili.com/" + Roomid,
 			},
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -2497,7 +2485,7 @@ func SearchUP(s string) (list []searchresult) {
 		req := reqf.New()
 		if err := req.Reqf(reqf.Rval{
 			Url:     "https://api.bilibili.com/x/web-interface/search/type?context=&search_type=live_user&cover_type=user_cover&page=1&order=&category_id=&__refresh__=true&_extra=&highlight=1&single_column=0&keyword=" + url.PathEscape(s),
-			Proxy:   c.Proxy,
+			Proxy:   kv.LoadV(`Common.Proxy`).(string),
 			Timeout: 10 * 1000,
 			Retry:   2,
 		}); err != nil {
@@ -2555,7 +2543,7 @@ func IsConnected() bool {
 	req := reqf.New()
 	if err := req.Reqf(reqf.Rval{
 		Url:              "https://www.bilibili.com",
-		Proxy:            c.Proxy,
+		Proxy:            kv.LoadV(`Common.Proxy`).(string),
 		Timeout:          10 * 1000,
 		JustResponseCode: true,
 	}); err != nil {

@@ -94,7 +94,6 @@ func init() {
 		}
 	}
 	Log = Log.Level(logmap)
-	return
 }
 
 //from player-loader-2.0.11.min.js
@@ -109,8 +108,8 @@ func init() {
 
 var (
 	AcceptQn = map[int]string{
+		20000: "4K",
 		10000: "原画",
-		800:   "4K",
 		401:   "蓝光(杜比)",
 		400:   "蓝光",
 		250:   "超清",
@@ -118,8 +117,8 @@ var (
 		80:    "流畅",
 	}
 	Qn = map[int]string{ // no change
+		20000: "4K",
 		10000: "原画",
-		800:   "4K",
 		401:   "蓝光(杜比)",
 		400:   "蓝光",
 		250:   "超清",
