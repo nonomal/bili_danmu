@@ -20,6 +20,8 @@ import (
 	limit "github.com/qydysky/part/limit"
 	msgq "github.com/qydysky/part/msgq"
 	reqf "github.com/qydysky/part/reqf"
+	pstrings "github.com/qydysky/part/strings"
+	sys "github.com/qydysky/part/sys"
 	ws "github.com/qydysky/part/websocket"
 )
 
@@ -176,17 +178,19 @@ func TTS(msg string) {
 
 func play() {
 	var prog = []string{}
-	prog = append(prog, p.Sys().Cdir()+"/tts.mp3")
+	prog = append(prog, sys.Sys().Cdir()+"/tts.mp3")
 	prog = append(prog, strings.Split(tts_prog_set, " ")...)
 	p.Exec().Run(false, tts_prog, prog...)
 
 }
 
 func baidu(msg string) error {
-	req := reqf.New()
+	reqi := c.C.ReqPool.Get()
+	defer c.C.ReqPool.Put(reqi)
+	req := reqi.Item.(*reqf.Req)
 	if err := req.Reqf(reqf.Rval{
 		Url:        `https://fanyi.baidu.com/gettts?lan=zh&text=` + url.PathEscape(msg) + `&spd=5&source=web`,
-		SaveToPath: p.Sys().Cdir() + `/tts.mp3`,
+		SaveToPath: sys.Sys().Cdir() + `/tts.mp3`,
 		Timeout:    3 * 1000,
 		Retry:      1,
 		SleepTime:  5000,
@@ -226,7 +230,7 @@ func youdao(msg string) error {
 			`q`:            msg,
 			`langType`:     "zh-CHS",
 			`youdaoappKey`: youdaoId,
-			`salt`:         p.Stringf().Rand(1, 8),
+			`salt`:         pstrings.Rand(1, 8),
 		}
 		postS string
 	)
@@ -238,11 +242,13 @@ func youdao(msg string) error {
 		postS += k + `=` + v
 	}
 
-	req := reqf.New()
+	reqi := c.C.ReqPool.Get()
+	defer c.C.ReqPool.Put(reqi)
+	req := reqi.Item.(*reqf.Req)
 	if err := req.Reqf(reqf.Rval{
 		Url:        `https://openapi.youdao.com/ttsapi`,
 		PostStr:    url.PathEscape(postS),
-		SaveToPath: p.Sys().Cdir() + `/tts.mp3`,
+		SaveToPath: sys.Sys().Cdir() + `/tts.mp3`,
 		Timeout:    3 * 1000,
 		Retry:      1,
 		SleepTime:  5000,
@@ -403,7 +409,7 @@ func init() {
 				}
 				if len(buf) != 0 {
 					p.File().FileWR(p.Filel{
-						File:    p.Sys().Cdir() + `/tts.mp3`,
+						File:    sys.Sys().Cdir() + `/tts.mp3`,
 						Context: []interface{}{buf},
 					})
 					play()

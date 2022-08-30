@@ -13,8 +13,9 @@ import (
 	F "github.com/qydysky/bili_danmu/F"
 	reply "github.com/qydysky/bili_danmu/Reply"
 	send "github.com/qydysky/bili_danmu/Send"
+	Cmd "github.com/qydysky/bili_danmu/cmd"
+	sys "github.com/qydysky/part/sys"
 
-	p "github.com/qydysky/part"
 	msgq "github.com/qydysky/part/msgq"
 	reqf "github.com/qydysky/part/reqf"
 	ws "github.com/qydysky/part/websocket"
@@ -33,9 +34,12 @@ func init() {
 	}()
 }
 
-func Demo(roomid ...int) {
-	var danmulog = c.C.Log.Base(`bilidanmu Demo`)
+func Start(roomid ...int) {
+	var danmulog = c.C.Log.Base(`bilidanmu`)
 	defer danmulog.Block(1000)
+
+	var stop = sys.Sys().PreventSleep()
+	defer stop.Done()
 
 	//ctrl+c退出
 	interrupt := make(chan os.Signal, 2)
@@ -80,7 +84,7 @@ func Demo(roomid ...int) {
 			}
 		}
 		//命令行操作 切换房间 发送弹幕
-		go F.Cmd()
+		go Cmd.Cmd()
 
 		//使用带tag的消息队列在功能间传递消息
 		c.C.Danmu_Main_mq.Pull_tag(msgq.FuncMap{
@@ -92,11 +96,12 @@ func Demo(roomid ...int) {
 				return false
 			},
 			`change_room`: func(data interface{}) bool { //房间改变
-				c.C.Rev = 0.0    //营收
-				c.C.Renqi = 1    //人气置1
-				c.C.GuardNum = 0 //舰长数
-				c.C.Note = ``    //分区排行
-				c.C.Uname = ``   //主播id
+				c.C.Rev = 0.0    // 营收
+				c.C.Renqi = 1    // 人气置1
+				c.C.Watched = 0  // 观看人数
+				c.C.GuardNum = 0 // 舰长数
+				c.C.Note = ``    // 分区排行
+				c.C.Uname = ``   // 主播id
 				c.C.Title = ``
 				c.C.Wearing_FansMedal = 0
 				for len(change_room_chan) != 0 {
@@ -215,7 +220,7 @@ func Demo(roomid ...int) {
 					}
 					//30s获取一次人气
 					go func() {
-						p.Sys().MTimeoutf(500) //500ms
+						sys.Sys().MTimeoutf(500) //500ms
 						danmulog.L(`T: `, "获取人气")
 						go func() {
 							heartbeatmsg, heartinterval := F.Heartbeat()
@@ -246,8 +251,6 @@ func Demo(roomid ...int) {
 								// go F.Get(`VERSION`)
 								//每日兑换硬币
 								go F.Get(&c.C).Silver_2_coin()
-								//小心心
-								go F.F_x25Kn()
 								//附加功能 每日发送弹幕
 								go reply.Entry_danmu()
 								//附加功能 保持牌子点亮
@@ -270,10 +273,11 @@ func Demo(roomid ...int) {
 
 						{ //附加功能 进房间发送弹幕 直播流保存 营收
 							go reply.Entry_danmu()
-							go reply.Savestreamf()
+							c.C.Danmu_Main_mq.Push_tag(`savestream`, reply.SavestreamO{
+								Roomid: c.C.Roomid,
+								IsRec:  true,
+							})
 							go reply.ShowRevf()
-							//小心心
-							go F.F_x25Kn()
 						}
 					}()
 				}
@@ -309,13 +313,18 @@ func Demo(roomid ...int) {
 					break
 				}
 			}
-			{ //附加功能 直播流停止
-				reply.Savestream_wait()
+			{ //附加功能 ws信息保存
 				reply.Save_to_json(-1, []interface{}{`{}]`})
+				if v, ok := c.C.K_v.LoadV(`仅保存当前直播间流`).(bool); ok && v {
+					reply.StreamOStop(-2) //停止其他房间录制
+				}
 			}
-			p.Sys().Timeoutf(1)
+			sys.Sys().Timeoutf(1)
 		}
 
+		{ //附加功能 直播流停止
+			reply.StreamOStop(-1)
+		}
 		close(interrupt)
 		danmulog.L(`I: `, "结束退出")
 	}
