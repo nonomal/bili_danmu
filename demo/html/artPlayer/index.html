@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>live</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {
+                margin: 0;
+                padding: 0;
+                background-color: black;
+            }
+            .art-danmuku > div > div {
+                font-size: 1.5em;
+                text-shadow: 0 0 10px black;
+            }
+            .artplayer-app {
+                margin: auto;
+                position: absolute;
+                top: 0px;
+                bottom: 0px;
+                width: 100%;
+                max-height: 100vh;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="artplayer-app"></div>
+        <script type="">
+            function addDOM(El,ElN,text,cla){
+                var d=document.createElement(ElN);
+                if(text)d.innerHTML=text;
+                for(var i=0;i<cla.length;i++)d.setAttribute(cla[i][0],cla[i][1]);
+                El.appendChild(d);
+            }
+            addDOM(document.body, "script", "", [["src","bundle.js?_="+(new Date().getTime())]]);
+        </script>
+    </body>
+</html>

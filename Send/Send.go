@@ -1,80 +1,160 @@
 package send
 
 import (
-	"strconv"
 	"encoding/json"
-	"net/url"
+	"errors"
+	"io"
+	"strconv"
+	"time"
 
 	c "github.com/qydysky/bili_danmu/CV"
 
-	p "github.com/qydysky/part"
-	reqf "github.com/qydysky/part/reqf"
+	file "github.com/qydysky/part/file"
 	limit "github.com/qydysky/part/limit"
+	reqf "github.com/qydysky/part/reqf"
 )
 
-//每5s一个令牌，最多等20秒
-var danmu_s_limit = limit.New(1, 5000, 20000)
+// 每5s一个令牌，最多等20秒
+var danmu_s_limit = limit.New(1, "5s", "20s")
+var damnu_official = make(map[string]string)
 
-//弹幕发送
-func Danmu_s(msg string, roomid int) {
-	//等待令牌时阻塞，超时返回true
-	if danmu_s_limit.TO() {return}
-
-	l := c.Log.Base("弹幕发送")
-
-	if msg == "" || roomid == 0{
-		l.L(`E: `,"输入参数不足")
+// 初始化表情代码
+func init() {
+	f := file.New("config/config_danmu_official.json", 0, true)
+	if !f.IsExist() {
 		return
 	}
+	bb, err := f.ReadAll(1000, 1<<16)
+	if !errors.Is(err, io.EOF) {
+		return
+	}
+	var buf map[string]interface{}
+	_ = json.Unmarshal(bb, &buf)
+	for k, v := range buf {
+		if k == v {
+			continue
+		}
+		damnu_official[k] = v.(string)
+	}
+}
 
-	csrf,_ := c.Cookie.LoadV(`bili_jct`).(string)
-	if csrf == `` {l.L(`E: `,"Cookie错误,无bili_jct=");return}
+// 弹幕发送
+func Danmu_s(msg string, roomid int) error {
+	data := map[string]string{
+		`msg`:    msg,
+		`roomid`: strconv.Itoa(roomid),
+	}
+
+	if v, ok := c.C.K_v.LoadV(`弹幕_识别表情代码`).(bool); ok && v {
+		if v, ok := damnu_official[msg]; ok {
+			data[`msg`] = v
+			data[`dm_type`] = `1`
+		}
+	}
+
+	return Danmu_s2(data)
+}
+
+var (
+	ErrLimit     = errors.New("ErrLimit")
+	ErrMsgEmpty  = errors.New("ErrMsgEmpty")
+	ErrRoomEmpty = errors.New("ErrRoomEmpty")
+	ErrNoLogin   = errors.New("ErrNoLogin")
+	ErrRes       = errors.New("ErrRes")
+)
+
+// 通用发送
+func Danmu_s2(data map[string]string) error {
+	//等待令牌时阻塞，超时返回true
+	if danmu_s_limit.TO() {
+		return ErrLimit
+	}
+
+	l := c.C.Log.Base("弹幕发送")
+
+	if _, ok := data[`msg`]; !ok {
+		l.L(`E: `, "必须输入参数msg")
+		return ErrMsgEmpty
+	}
+
+	if _, ok := data[`roomid`]; !ok {
+		l.L(`E: `, "必须输入参数roomid")
+		return ErrRoomEmpty
+	}
+
+	csrf, _ := c.C.Cookie.LoadV(`bili_jct`).(string)
+	if csrf == `` {
+		l.L(`E: `, "Cookie错误,无bili_jct=")
+		return ErrNoLogin
+	}
+
+	if _, ok := data[`bubble`]; !ok {
+		data[`bubble`] = `0`
+	}
+	if _, ok := data[`color`]; !ok {
+		data[`color`] = `5816798`
+	}
+	if _, ok := data[`mode`]; !ok {
+		data[`mode`] = `1`
+	}
+	if _, ok := data[`fontsize`]; !ok {
+		data[`fontsize`] = `25`
+	}
+	data[`rnd`] = strconv.Itoa(int(time.Now().Unix()))
+	data[`csrf`] = csrf
+	data[`csrf_token`] = csrf
 
 	Cookie := make(map[string]string)
-	c.Cookie.Range(func(k,v interface{})(bool){
+	c.C.Cookie.Range(func(k, v interface{}) bool {
 		Cookie[k.(string)] = v.(string)
 		return true
 	})
 
-	PostStr := `color=16777215&fontsize=25&mode=1&msg=` + msg + `&rnd=` + strconv.Itoa(int(p.Sys().GetSTime())) + `&roomid=` + strconv.Itoa(roomid) + `&bubble=0&csrf_token=` + csrf + `&csrf=` + csrf
-	l.L(`I: `,"发送", msg, "至", roomid)
-	r := reqf.New()
+	postStr, contentType := reqf.ToForm(data)
+	l.L(`I: `, "发送", data[`msg`], "至", data[`roomid`])
+
+	r := c.C.ReqPool.Get()
+	defer c.C.ReqPool.Put(r)
 	err := r.Reqf(reqf.Rval{
-		Url:"https://api.live.bilibili.com/msg/send",
-		PostStr:url.PathEscape(PostStr),
-		Retry:2,
-		Timeout:5*1000,
-		Proxy:c.Proxy,
-		Header:map[string]string{
-			`Host`: `api.live.bilibili.com`,
-			`User-Agent`: `Mozilla/5.0 (X11; Linux x86_64; rv:83.0) Gecko/20100101 Firefox/83.0`,
-			`Accept`: `application/json, text/javascript, */*; q=0.01`,
+		Url:     "https://api.live.bilibili.com/msg/send",
+		PostStr: postStr,
+		Retry:   2,
+		Timeout: 5 * 1000,
+		Proxy:   c.C.Proxy,
+		Header: map[string]string{
+			`Host`:            `api.live.bilibili.com`,
+			`User-Agent`:      c.UA,
+			`Accept`:          `application/json, text/javascript, */*; q=0.01`,
 			`Accept-Language`: `zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2`,
 			`Accept-Encoding`: `gzip, deflate, br`,
-			`Content-Type`: `application/x-www-form-urlencoded; charset=UTF-8`,
-			`Origin`: `https://live.bilibili.com`,
-			`Connection`: `keep-alive`,
-			`Pragma`: `no-cache`,
-			`Cache-Control`: `no-cache`,
-			`Referer`:"https://live.bilibili.com/" + strconv.Itoa(roomid),
-			`Cookie`:reqf.Map_2_Cookies_String(Cookie),
+			`Content-Type`:    contentType,
+			`Origin`:          `https://live.bilibili.com`,
+			`Connection`:      `keep-alive`,
+			`Pragma`:          `no-cache`,
+			`Cache-Control`:   `no-cache`,
+			`Referer`:         "https://live.bilibili.com/" + data[`roomid`],
+			`Cookie`:          reqf.Map_2_Cookies_String(Cookie),
 		},
 	})
 	if err != nil {
-		l.L(`E: `,err)
-		return
+		l.L(`E: `, err)
+		return err
 	}
-	
-	var res struct{
-		Code int `json:"code"`
+
+	var res struct {
+		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
 
-	if e := json.Unmarshal(r.Respon, &res);e != nil{
-		l.L(`E: `,e)
+	if e := json.Unmarshal(r.Respon, &res); e != nil {
+		l.L(`E: `, e)
+		return e
 	}
 
 	if res.Code != 0 {
-		l.L(`E: `, `产生错误：`,res.Code, res.Message)
+		l.L(`E: `, `产生错误：`, res.Code, res.Message)
+		return errors.Join(ErrRes, errors.New(res.Message))
 	}
+
+	return nil
 }

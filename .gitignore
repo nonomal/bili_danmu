@@ -19,3 +19,14 @@ demo/tts.mp3
 demo/cpu.pprof
 demo/qr.png
 demo/live
+demo/main.exe
+*.m4s
+demo/build.bat
+demo/build.sh
+Reply/0.flv.log
+demo/coverage.txt
+coverage.txt
+demo/danmu.sqlite3
+plugin/*.go
+bili_danmu.go
+demo/emots/*.png
